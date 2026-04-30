@@ -31,6 +31,8 @@ import atexit
 import subprocess
 import threading
 import tkinter as tk
+import shutil
+import logging
 
 from config_manager import load_config, flush_config
 from key_selector import KeySelectorWindow
@@ -90,37 +92,31 @@ class OnScreenKeyboardApp:
         # Catch root window destruction (e.g. via WM or unexpected close)
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
 
+        # Logging — configured in main() before app creation
+        self._logger = logging.getLogger("onscreen-keys.OnScreenKeyboardApp")
+
     def start(self):
         """Launch the application."""
+        self._logger.info("Starting On-Screen Keyboard...")
 
-        # Load saved config
         config = load_config()
         selected_keys = config.get("selected_keys", [])
 
         if selected_keys:
-            # Keys already configured — launch them directly
-            print(f"[main] Loading {len(selected_keys)} saved key(s)...")
+            self._logger.info(f"Loading {len(selected_keys)} saved key(s)...")
             self.key_manager.activate_keys(selected_keys)
         else:
-            # No keys configured — open selector
-            print("[main] No keys configured. Opening selector...")
+            self._logger.info("No keys configured. Opening selector...")
             self._open_selector()
 
-        # Start system tray (runs in background thread)
         self.tray.start()
-
-        # Register global hotkeys
         self._start_hotkey_listener()
-
-        # Start the terminal input listener ("quit" / "exit")
         self._start_terminal_listener()
 
-        # Run the Tkinter event loop
-        print("[main] On-Screen Keyboard is running.")
-        print("[main] Right-click the tray icon for options.")
-        print("[main] Press Ctrl+K to open the key selector.")
-        print("[main] Press Ctrl+H to hide/show floating keys.")
-        print("[main] Type 'quit' or 'exit', or press Ctrl+C to stop.")
+        self._logger.info("On-Screen Keyboard is running.")
+        self._logger.info("Right-click the tray icon for options.")
+        self._logger.info("Press Ctrl+K to open the key selector.")
+        self._logger.info("Press Ctrl+H to hide/show floating keys.")
         self.root.mainloop()
 
     # ── Global hotkeys (Ctrl+K / Ctrl+H) ─────────────────────────
@@ -326,16 +322,15 @@ class OnScreenKeyboardApp:
         """
         Handle OS signals by scheduling a clean shutdown on the Tk thread.
 
-        IMPORTANT: Signal handlers run in the main thread but NOT inside
-        the Tk event loop, so we use `after()` to defer to the loop.
+        IMPORTANT: Signal handlers run asynchronously — we MUST NOT
+        touch Tk widgets directly here. Use `after()` to defer to the loop.
         """
         sig_name = signal.Signals(signum).name
-        print(f"\n[main] Received {sig_name} — shutting down gracefully...")
+        self._logger.warning(f"Received {sig_name} — shutting down gracefully...")
 
         try:
-            self.root.event_generate("<<AppQuit>>", when="tail")
+            self.root.after(0, self._quit)
         except tk.TclError:
-            # Root already gone — force exit
             self._force_cleanup()
             sys.exit(0)
 
@@ -385,40 +380,38 @@ class OnScreenKeyboardApp:
         Clean, idempotent shutdown.
 
         Safe to call from any thread or callback — uses a lock
-        to guarantee exactly-once execution.
+        to guarantee exactly-once execution, then schedules
+        actual cleanup on the Tk main thread.
         """
         with self._shutdown_lock:
             if self._shutting_down:
                 return   # Already running — skip duplicate
             self._shutting_down = True
 
-        print("[main] Shutting down...")
+        # Schedule all widget destruction on Tk main thread
+        self.root.after(0, self._quit_in_main_thread)
 
-        # 1. Destroy all floating key windows
+    def _quit_in_main_thread(self):
+        """Run the actual cleanup — MUST be called from Tk main thread."""
+        self._logger.info("Shutting down...")
+
         try:
             self.key_manager.destroy_all()
         except Exception as e:
-            print(f"[main] Warning during key cleanup: {e}")
+            self._logger.warning(f"Warning during key cleanup: {e}")
 
-        # 2. Stop the system tray icon
         try:
             self.tray.stop()
         except Exception as e:
-            print(f"[main] Warning during tray cleanup: {e}")
+            self._logger.warning(f"Warning during tray cleanup: {e}")
 
-        # 3. Flush any pending debounced config saves
         try:
             flush_config()
         except Exception as e:
-            print(f"[main] Warning during config flush: {e}")
+            self._logger.warning(f"Warning during config flush: {e}")
 
-        # 4. Quit the Tk mainloop
-        try:
-            self._destroy_root()
-        except tk.TclError:
-            pass  # Root already gone
-
-        print("[main] Goodbye! ✓")
+        self._destroy_root()
+        self._logger.info("Goodbye!")
 
     def _destroy_root(self):
         """
@@ -465,8 +458,43 @@ class OnScreenKeyboardApp:
 
 # ─── Entry point ─────────────────────────────────────────────────────
 
+def _check_xdotool():
+    """Return True if xdotool is available, False otherwise."""
+    return shutil.which("xdotool") is not None
+
+
+def _setup_logging():
+    """Configure logging to file and stderr."""
+    log_dir = os.path.expanduser("~/.config/onscreen-keys")
+    log_file = os.path.join(log_dir, "app.log")
+    os.makedirs(log_dir, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stderr),
+        ],
+    )
+    return logging.getLogger("onscreen-keys")
+
+
 def main():
     """Create and start the application."""
+    logger = _setup_logging()
+
+    # Check for xdotool before doing anything else
+    if not _check_xdotool():
+        logger.error("xdotool not found — this app requires it to simulate key presses")
+        logger.error("Install with: sudo apt install xdotool")
+        tk.messagebox.showerror(
+            "Missing Dependency",
+            "xdotool is required but not installed.\n\n"
+            "Install with: sudo apt install xdotool",
+        )
+        sys.exit(1)
+
     print("=" * 50)
     print("  ⌨  On-Screen Keyboard for Broken Keys")
     print("  ──────────────────────────────────────")

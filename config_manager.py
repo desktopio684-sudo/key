@@ -69,28 +69,33 @@ def load_config():
         if _cached_config is not None:
             return copy.deepcopy(_cached_config)
 
-        try:
-            if os.path.exists(CONFIG_FILE):
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+        # Fall through to load from disk without holding the lock
+        # (I/O operations don't require thread safety)
+        _cached_config = None
 
-                # Validate structure — ensure expected keys exist
-                if not isinstance(data.get("selected_keys"), list):
-                    data["selected_keys"] = []
-                if data.get("spawn_anchor") not in VALID_SPAWN_ANCHORS:
-                    data["spawn_anchor"] = DEFAULT_CONFIG["spawn_anchor"]
-                if not isinstance(data.get("positions"), dict):
-                    data["positions"] = {}
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
 
+            if not isinstance(data.get("selected_keys"), list):
+                data["selected_keys"] = []
+            if data.get("spawn_anchor") not in VALID_SPAWN_ANCHORS:
+                data["spawn_anchor"] = DEFAULT_CONFIG["spawn_anchor"]
+            if not isinstance(data.get("positions"), dict):
+                data["positions"] = {}
+
+            with _config_lock:
                 _cached_config = data
-                return copy.deepcopy(data)
+            return copy.deepcopy(data)
 
-        except (json.JSONDecodeError, IOError, OSError) as e:
-            print(f"[config_manager] Warning: Could not load config: {e}")
-            print("[config_manager] Using default config.")
+    except (json.JSONDecodeError, IOError, OSError) as e:
+        print(f"[config_manager] Warning: Could not load config: {e}")
+        print("[config_manager] Using default config.")
 
+    with _config_lock:
         _cached_config = dict(DEFAULT_CONFIG)
-        return copy.deepcopy(_cached_config)
+    return copy.deepcopy(_cached_config)
 
 
 def save_config(config, debounce=False):
@@ -121,6 +126,7 @@ def save_config(config, debounce=False):
 
 def _write_to_disk():
     global _cached_config
+    config_to_save = None
     with _config_lock:
         if _cached_config is None:
             return

@@ -28,6 +28,7 @@ from key_registry import get_key_by_id, get_category_for_key
 from config_manager import save_key_position, get_saved_position, get_spawn_anchor
 
 from shared_theme import FLOATING_OPACITY, get_floating_colors
+from shared_theme import COLORS
 
 # Minimum button size
 MIN_WIDTH = 48
@@ -44,6 +45,23 @@ SCREEN_MARGIN = 8
 SPAWN_MARGIN = 28
 DENSE_MIN_WIDTH = 28
 DENSE_MIN_HEIGHT = 24
+
+# Polling intervals (milliseconds)
+FOCUS_POLL_INTERVAL_MS = 200
+HIDDEN_POLL_INTERVAL_MS = 500
+SLOW_POLL_INTERVAL_MS = 2000
+
+# xdotool timeouts (seconds)
+XDOTOOL_FOCUS_TIMEOUT = 1
+XDOTOOL_KEY_TIMEOUT = 2
+MODIFIER_KEYUP_TIMEOUT = 1
+
+# Visual feedback durations (milliseconds)
+VISUAL_FLASH_DURATION_MS = 120
+ERROR_FLASH_DURATION_MS = 500
+
+# Config debounce (seconds)
+CONFIG_DEBOUNCE_SEC = 0.5
 
 _PRIMARY_MONITOR_BOUNDS = None
 LATCHING_MODIFIER_KEY_IDS = {"ctrl_l", "alt_l", "super_l", "shift_l"}
@@ -455,6 +473,9 @@ class FloatingKey:
         CRITICAL: We must refocus the user's previously active window
         before sending the keystroke, so it lands in their editor /
         terminal — not our floating button.
+
+        Tracks success/failure to avoid showing misleading flash animation
+        when xdotool is missing or fails.
         """
 
         if self.is_sticky_modifier:
@@ -468,41 +489,41 @@ class FloatingKey:
         )
 
         last_wid = self.manager.last_focused_window
+        success = False
 
         try:
             if last_wid:
-                # Refocus the user's window, then send the key to it
-                subprocess.run(
+                focus_result = subprocess.run(
                     ["xdotool", "windowfocus", "--sync", last_wid],
-                    timeout=1,
+                    timeout=XDOTOOL_FOCUS_TIMEOUT,
                     check=False,
                 )
-                subprocess.run(
+                key_result = subprocess.run(
                     ["xdotool", "key", key_spec],
-                    timeout=2,
+                    timeout=XDOTOOL_KEY_TIMEOUT,
                     check=False,
                 )
+                success = (key_result.returncode == 0)
             else:
-                # Fallback: no tracked window — just send key blindly
-                subprocess.run(
+                result = subprocess.run(
                     ["xdotool", "key", key_spec],
-                    timeout=2,
+                    timeout=XDOTOOL_KEY_TIMEOUT,
                     check=False,
                 )
+                success = (result.returncode == 0)
+
         except FileNotFoundError:
             print("[floating_keys] Error: xdotool not found! Install with: sudo apt install xdotool")
         except subprocess.TimeoutExpired:
             print(f"[floating_keys] Warning: xdotool timed out for key '{self.xdotool_key}'")
 
-        # Visual flash feedback after sending the key.
-        self.btn_label.config(bg=self.colors["flash"], fg=self.colors["active_fg"])
-        self.window.update_idletasks()
-
-        # Reset color after brief flash
-        self.window.after(
-            120,
-            self._refresh_visual_state,
-        )
+        # Visual feedback: only flash on success; show error state on failure
+        if success:
+            self.btn_label.config(bg=self.colors["flash"], fg=self.colors["active_fg"])
+            self.window.after(VISUAL_FLASH_DURATION_MS, self._refresh_visual_state)
+        else:
+            self.btn_label.config(bg="#F38BA8", fg="#0A0A12")
+            self.window.after(ERROR_FLASH_DURATION_MS, self._refresh_visual_state)
 
     def _on_hover_enter(self, event):
         """Lighten button on hover."""
@@ -556,12 +577,13 @@ class FloatingKeyManager:
         self._visible = True
 
         # ── Focus tracking ───────────────────────────────────────
-        # We poll `xdotool getactivewindow` every 150ms and remember
-        # the last window ID that ISN'T one of our own windows.
+        # We poll `xdotool getactivewindow` every FOCUS_POLL_INTERVAL_MS
+        # and remember the last window ID that ISN'T one of our own windows.
         # This lets us refocus the user's app before sending keys.
         self.last_focused_window = None
         self._our_window_ids = set()      # X11 window IDs of our buttons
         self._focus_poll_running = False
+        self._poll_interval = FOCUS_POLL_INTERVAL_MS
         self.active_modifier_keys = set()
 
     def is_modifier_active(self, key_id):
@@ -572,37 +594,32 @@ class FloatingKeyManager:
         """Toggle a sticky modifier and refresh all modifier button states."""
         if key_id in self.active_modifier_keys:
             self.active_modifier_keys.remove(key_id)
-            # Release the modifier via xdotool
             if key_id in MODIFIER_XDOTOOL_KEYS:
                 subprocess.run(
                     ["xdotool", "keyup", MODIFIER_XDOTOOL_KEYS[key_id]],
-                    timeout=1,
+                    timeout=MODIFIER_KEYUP_TIMEOUT,
                     check=False,
                 )
         else:
             self.active_modifier_keys.add(key_id)
-            # Press the modifier via xdotool
             if key_id in MODIFIER_XDOTOOL_KEYS:
                 subprocess.run(
                     ["xdotool", "keydown", MODIFIER_XDOTOOL_KEYS[key_id]],
-                    timeout=1,
+                    timeout=MODIFIER_KEYUP_TIMEOUT,
                     check=False,
                 )
-        # Refresh all modifier buttons to show updated state
         self._refresh_all_modifier_buttons()
 
     def clear_all_modifiers(self):
         """Release all latched modifiers at once."""
-        # Release modifiers in reverse order for natural key-up behavior
         for key_id in reversed(MODIFIER_SEND_ORDER):
             if key_id in self.active_modifier_keys:
                 subprocess.run(
                     ["xdotool", "keyup", MODIFIER_XDOTOOL_KEYS[key_id]],
-                    timeout=1,
+                    timeout=MODIFIER_KEYUP_TIMEOUT,
                     check=False,
                 )
         self.active_modifier_keys.clear()
-        # Refresh all modifier buttons to show updated state
         self._refresh_all_modifier_buttons()
 
     def _refresh_all_modifier_buttons(self):
@@ -620,6 +637,9 @@ class FloatingKeyManager:
         Args:
             key_ids: list of key ID strings from the registry.
         """
+        global _PRIMARY_MONITOR_BOUNDS
+        _PRIMARY_MONITOR_BOUNDS = None  # Re-detect on each activation (display hotplug)
+
         self.destroy_all()
         unsaved_keys = []
 
@@ -685,15 +705,9 @@ class FloatingKeyManager:
         """
         Periodically check which window has focus.
 
-        Runs every 200ms. Saves the last window ID that ISN'T
-        one of our own floating buttons. This runs via Tk's
-        `after()` so it's on the main thread — no threading issues.
+        Uses `_poll_interval` which adjusts based on visibility and modifier state.
+        This runs via Tk's `after()` so it's on the main thread — no threading issues.
         """
-        if not self._visible:
-            # Keep polling but less frequently when hidden
-            self.root.after(500, self._poll_focus)
-            return
-
         try:
             result = subprocess.run(
                 ["xdotool", "getactivewindow"],
@@ -711,7 +725,7 @@ class FloatingKeyManager:
 
         # Schedule next poll
         try:
-            self.root.after(200, self._poll_focus)
+            self.root.after(self._poll_interval, self._poll_focus)
         except Exception:
             self._focus_poll_running = False
 
@@ -727,12 +741,16 @@ class FloatingKeyManager:
         for fk in self.floating_keys.values():
             fk.show()
         self._visible = True
+        self._poll_interval = FOCUS_POLL_INTERVAL_MS
 
     def hide_all(self):
         """Hide all floating buttons."""
         for fk in self.floating_keys.values():
             fk.hide()
         self._visible = False
+        # Slow down polling when hidden (unless modifiers are latched)
+        if not self.active_modifier_keys:
+            self._poll_interval = SLOW_POLL_INTERVAL_MS
 
     def destroy_all(self):
         """Destroy all floating button windows."""
@@ -743,6 +761,7 @@ class FloatingKeyManager:
         self.floating_keys.clear()
         self._our_window_ids.clear()
         self._visible = False
+        self._poll_interval = FOCUS_POLL_INTERVAL_MS
 
     def is_visible(self):
         """Return whether buttons are currently visible."""
