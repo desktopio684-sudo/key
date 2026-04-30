@@ -84,6 +84,21 @@ The app saves selected keys and button positions in:
 - `Ctrl+K`: Open key selector (reconfigure keys)
 - `Ctrl+H`: Toggle floating keys visibility (hide/show)
 
+### Modifier keys (sticky mode)
+
+The modifier keys (Ctrl, Alt, Super, Shift) work as **toggle/latching** keys:
+
+1. **Tap once** → Modifier latches ON (button highlights)
+2. **Tap again** → Modifier releases
+3. **While latched**, tap any other key to send chorded input (e.g., Ctrl+A)
+4. **Multiple modifiers** can be latched simultaneously for complex chords (e.g., Ctrl+Shift+Z)
+5. **Clear Modifiers**: Right-click tray icon → "Clear Modifiers" to release all latched modifiers at once
+
+This allows:
+- On-screen Ctrl + physical key combinations
+- Building complex chords without holding keys
+- Accessibility for users who can't press multiple keys simultaneously
+
 
 ## Recent Changes
 
@@ -115,6 +130,29 @@ These changes enhance usability for accessibility, preventing accidental modifie
      ```
    - Reload your shell config with `source ~/.bashrc` (or equivalent) after adding.
 
+
+## Security Note
+
+**⚠️ About xdotool privileges:**
+
+This application uses `xdotool` to simulate keyboard input. xdotool runs with **your user's privileges** and can:
+
+- Send any key press to any window
+- Control window focus and mouse events
+- Access any application you can interact with
+
+**What this means:**
+- The app cannot escalate privileges or access files directly
+- It can only do what your keyboard can do (type, send shortcuts)
+- Malicious use could simulate unwanted key presses (same as any keyboard macro)
+- Only run this app from trusted sources
+
+**Good security practices:**
+- Don't run modified versions from untrusted sources
+- Review code changes before running
+- The app only calls `xdotool key` — it cannot read your files or network
+
+---
 
 ## 3. Local Development
 

@@ -569,7 +569,7 @@ class FloatingKeyManager:
         return key_id in self.active_modifier_keys
 
     def toggle_modifier(self, key_id):
-        """Toggle a sticky modifier and refresh its button state."""
+        """Toggle a sticky modifier and refresh all modifier button states."""
         if key_id in self.active_modifier_keys:
             self.active_modifier_keys.remove(key_id)
             # Release the modifier via xdotool
@@ -588,6 +588,8 @@ class FloatingKeyManager:
                     timeout=1,
                     check=False,
                 )
+        # Refresh all modifier buttons to show updated state
+        self._refresh_all_modifier_buttons()
 
     def clear_all_modifiers(self):
         """Release all latched modifiers at once."""
@@ -600,6 +602,14 @@ class FloatingKeyManager:
                     check=False,
                 )
         self.active_modifier_keys.clear()
+        # Refresh all modifier buttons to show updated state
+        self._refresh_all_modifier_buttons()
+
+    def _refresh_all_modifier_buttons(self):
+        """Refresh visual state of all modifier buttons."""
+        for key_id in LATCHING_MODIFIER_KEY_IDS:
+            if key_id in self.floating_keys:
+                self.floating_keys[key_id]._refresh_visual_state()
 
     def activate_keys(self, key_ids):
         """
@@ -675,7 +685,7 @@ class FloatingKeyManager:
         """
         Periodically check which window has focus.
 
-        Runs every 150ms. Saves the last window ID that ISN'T
+        Runs every 200ms. Saves the last window ID that ISN'T
         one of our own floating buttons. This runs via Tk's
         `after()` so it's on the main thread — no threading issues.
         """

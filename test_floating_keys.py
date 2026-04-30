@@ -135,6 +135,30 @@ class FloatingKeyLayoutTests(unittest.TestCase):
     def test_no_latched_modifiers_keeps_plain_key_spec(self):
         self.assertEqual(build_xdotool_key_spec("a", set()), "a")
 
+    def test_modifier_order_is_consistent_for_chorded_input(self):
+        """Verify modifiers are always sent in MODIFIER_SEND_ORDER."""
+        # Regardless of insertion order, output should follow MODIFIER_SEND_ORDER
+        result1 = build_xdotool_key_spec("x", {"shift_l", "ctrl_l", "alt_l"})
+        result2 = build_xdotool_key_spec("x", {"alt_l", "ctrl_l", "shift_l"})
+        result3 = build_xdotool_key_spec("x", {"ctrl_l", "alt_l", "shift_l"})
+
+        # All should produce the same result in correct order
+        expected = "Control_L+Alt_L+Shift_L+x"
+        self.assertEqual(result1, expected)
+        self.assertEqual(result2, expected)
+        self.assertEqual(result3, expected)
+
+    def test_all_four_modifiers_chorded(self):
+        """Test Ctrl+Alt+Super+Shift chord combination."""
+        result = build_xdotool_key_spec(
+            "z",
+            {"ctrl_l", "alt_l", "super_l", "shift_l"}
+        )
+        self.assertEqual(
+            result,
+            "Control_L+Alt_L+Super_L+Shift_L+z"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

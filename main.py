@@ -80,6 +80,7 @@ class OnScreenKeyboardApp:
             on_hide=lambda: self.root.event_generate("<<TrayHide>>", when="tail"),
             on_reconfigure=lambda: self.root.event_generate("<<TrayReconfigure>>", when="tail"),
             on_quit=lambda: self.root.event_generate("<<AppQuit>>", when="tail"),
+            on_clear_modifiers=lambda: self.key_manager.clear_all_modifiers(),
         )
 
         # ── Register shutdown hooks ──────────────────────────────

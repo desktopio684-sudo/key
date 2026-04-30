@@ -103,20 +103,22 @@ class TrayIcon:
     Runs in a background thread so it doesn't block the Tk mainloop.
     """
 
-    def __init__(self, on_toggle, on_show, on_hide, on_reconfigure, on_quit):
+    def __init__(self, on_toggle, on_show, on_hide, on_reconfigure, on_quit, on_clear_modifiers=None):
         """
         Args:
-            on_toggle:      callable() — toggle floating key visibility
-            on_show:        callable() — show all floating keys
-            on_hide:        callable() — hide all floating keys
-            on_reconfigure: callable() — reopen key selector
-            on_quit:        callable() — quit the application
+            on_toggle:          callable() — toggle floating key visibility
+            on_show:            callable() — show all floating keys
+            on_hide:            callable() — hide all floating keys
+            on_reconfigure:     callable() — reopen key selector
+            on_quit:            callable() — quit the application
+            on_clear_modifiers: callable() — clear all latched modifiers (optional)
         """
         self.on_toggle = on_toggle
         self.on_show = on_show
         self.on_hide = on_hide
         self.on_reconfigure = on_reconfigure
         self.on_quit = on_quit
+        self.on_clear_modifiers = on_clear_modifiers
         self.icon = None
         self._thread = None
         self._stopped = False
@@ -136,7 +138,7 @@ class TrayIcon:
         image = _create_tray_icon_image()
 
         # ── Full right-click menu ────────────────────────────────
-        menu = Menu(
+        menu_items = [
             MenuItem(
                 "Show / Hide Keys",
                 self._handle_toggle,
@@ -147,9 +149,18 @@ class TrayIcon:
             MenuItem("Hide Keys", self._handle_hide),
             Menu.SEPARATOR,
             MenuItem("Reconfigure Keys  (Ctrl+K)", self._handle_reconfigure),
-            Menu.SEPARATOR,
-            MenuItem("Quit", self._handle_quit),
-        )
+        ]
+
+        # Add Clear Modifiers if available (when modifiers can be latched)
+        if self.on_clear_modifiers:
+            menu_items.append(Menu.SEPARATOR)
+            menu_items.append(MenuItem("Clear Modifiers", self._handle_clear_modifiers))
+            menu_items.append(Menu.SEPARATOR)
+        else:
+            menu_items.append(Menu.SEPARATOR)
+
+        menu_items.append(MenuItem("Quit", self._handle_quit))
+        menu = Menu(*menu_items)
 
         self.icon = pystray.Icon(
             name="onscreen-keys",
@@ -177,6 +188,11 @@ class TrayIcon:
     def _handle_reconfigure(self, icon, item):
         """Reopen the key selector."""
         self.on_reconfigure()
+
+    def _handle_clear_modifiers(self, icon, item):
+        """Clear all latched modifiers."""
+        if self.on_clear_modifiers:
+            self.on_clear_modifiers()
 
     def _handle_quit(self, icon, item):
         """Quit the application cleanly."""
