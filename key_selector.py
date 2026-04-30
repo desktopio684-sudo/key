@@ -18,7 +18,13 @@ import tkinter as tk
 from tkinter import ttk
 
 from key_registry import KEY_REGISTRY, get_categories
-from config_manager import load_config, save_selected_keys, save_config, DEFAULT_CONFIG
+from config_manager import (
+    load_config,
+    save_selected_keys_and_spawn_anchor,
+    save_spawn_anchor,
+    save_config,
+    DEFAULT_CONFIG,
+)
 import copy
 
 
@@ -38,6 +44,14 @@ CATEGORY_COLUMNS = {
 
 DEFAULT_COLUMNS = 8
 
+SPAWN_OPTIONS = [
+    ("center", "Center"),
+    ("top_left", "Top left"),
+    ("top_right", "Top right"),
+    ("bottom_left", "Bottom left"),
+    ("bottom_right", "Bottom right"),
+]
+
 
 class KeySelectorWindow:
     """
@@ -47,16 +61,19 @@ class KeySelectorWindow:
     Visual style: dark keycap tiles in a categorized grid.
     """
 
-    def __init__(self, on_activate_callback, parent_root=None):
+    def __init__(self, on_activate_callback, parent_root=None, on_clear_callback=None):
         """
         Args:
             on_activate_callback: function(selected_key_ids: list)
                 Called when the user clicks "Activate".
             parent_root: optional existing Tk root to attach to.
+            on_clear_callback: optional function called when Clear All is pressed.
         """
         self.on_activate = on_activate_callback
+        self.on_clear = on_clear_callback
         self.checkboxes = {}    # key_id → BooleanVar
         self.ui_updaters = {}   # key_id → function to refresh tile visually
+        self._tab_buttons = {}
 
         # ── Window setup ─────────────────────────────────────────
         if parent_root:
@@ -69,6 +86,10 @@ class KeySelectorWindow:
 
         self.window.resizable(True, True)
         self.window.configure(bg=COLORS["bg"])
+        self.spawn_anchor_var = tk.StringVar(
+            self.window,
+            value=DEFAULT_CONFIG["spawn_anchor"],
+        )
 
         self._build_ui()
         self._load_saved_selections()
@@ -100,9 +121,18 @@ class KeySelectorWindow:
             fg=COLORS["text_dim"],
         ).pack(side="left", padx=(14, 0))
 
-        # ── Scrollable content area ──────────────────────────────
-        container = tk.Frame(self.window, bg=COLORS["bg"])
-        container.pack(fill="both", expand=True, padx=0, pady=(4, 0))
+        # ── Tabs ─────────────────────────────────────────────────
+        self._build_tab_bar()
+
+        self.content_frame = tk.Frame(self.window, bg=COLORS["bg"])
+        self.content_frame.pack(fill="both", expand=True, padx=0, pady=(4, 0))
+
+        self.keys_tab = tk.Frame(self.content_frame, bg=COLORS["bg"])
+        self.config_tab = tk.Frame(self.content_frame, bg=COLORS["bg"])
+
+        # ── Scrollable key content area ──────────────────────────
+        container = tk.Frame(self.keys_tab, bg=COLORS["bg"])
+        container.pack(fill="both", expand=True, padx=0, pady=0)
 
         self._canvas = tk.Canvas(
             container,
@@ -150,8 +180,96 @@ class KeySelectorWindow:
         for category in get_categories():
             self._add_category_section(category)
 
+        self._build_config_tab()
+        self._show_tab("keys")
+
         # ── Bottom bar ───────────────────────────────────────────
         self._build_bottom_bar()
+
+    def _build_tab_bar(self):
+        """Build top-level selector/configuration tabs."""
+        tab_bar = tk.Frame(self.window, bg=COLORS["bg"])
+        tab_bar.pack(fill="x", padx=24, pady=(6, 0))
+
+        for tab_id, label in (("keys", "Keys"), ("config", "Configuration")):
+            btn = tk.Button(
+                tab_bar,
+                text=label,
+                font=("Sans", 9, "bold"),
+                bg=COLORS["surface"],
+                fg=COLORS["text"],
+                activebackground=COLORS["tile_hover"],
+                activeforeground=COLORS["text_selected"],
+                relief="flat",
+                padx=14,
+                pady=7,
+                cursor="hand2",
+                command=lambda t=tab_id: self._show_tab(t),
+            )
+            btn.pack(side="left", padx=(0, 8))
+            self._tab_buttons[tab_id] = btn
+
+    def _show_tab(self, tab_id):
+        """Show either the key selection or configuration tab."""
+        for frame in (self.keys_tab, self.config_tab):
+            frame.pack_forget()
+
+        if tab_id == "config":
+            self.config_tab.pack(fill="both", expand=True)
+        else:
+            self.keys_tab.pack(fill="both", expand=True)
+            tab_id = "keys"
+
+        for name, btn in self._tab_buttons.items():
+            selected = name == tab_id
+            btn.config(
+                bg=COLORS["tile_selected"] if selected else COLORS["surface"],
+                fg=COLORS["text_selected"] if selected else COLORS["text"],
+            )
+
+    def _build_config_tab(self):
+        """Build configuration controls."""
+        panel = tk.Frame(self.config_tab, bg=COLORS["bg"])
+        panel.pack(anchor="nw", fill="x", padx=24, pady=22)
+
+        tk.Label(
+            panel,
+            text="Floating key spawn position",
+            font=("Sans", 11, "bold"),
+            bg=COLORS["bg"],
+            fg=COLORS["text_selected"],
+        ).pack(anchor="w")
+
+        tk.Label(
+            panel,
+            text="Changing this resets dragged positions so the next activation uses this location.",
+            font=("Sans", 9),
+            bg=COLORS["bg"],
+            fg=COLORS["text_dim"],
+        ).pack(anchor="w", pady=(3, 14))
+
+        option_grid = tk.Frame(panel, bg=COLORS["bg"])
+        option_grid.pack(anchor="w")
+
+        for i, (value, label) in enumerate(SPAWN_OPTIONS):
+            option = tk.Radiobutton(
+                option_grid,
+                text=label,
+                value=value,
+                variable=self.spawn_anchor_var,
+                command=self._save_spawn_setting,
+                font=("Sans", 10),
+                bg=COLORS["bg"],
+                fg=COLORS["text"],
+                activebackground=COLORS["bg"],
+                activeforeground=COLORS["accent"],
+                selectcolor=COLORS["surface"],
+                relief="flat",
+                padx=8,
+                pady=6,
+                cursor="hand2",
+            )
+            option.grid(row=i // 3, column=i % 3, sticky="w", padx=(0, 22), pady=4)
 
     def _on_canvas_resize(self, event):
         """Keep the scroll_frame as wide as the canvas viewport."""
@@ -395,6 +513,7 @@ class KeySelectorWindow:
         """Pre-check tiles from saved config."""
         config = load_config()
         saved_keys = config.get("selected_keys", [])
+        self.spawn_anchor_var.set(config.get("spawn_anchor", DEFAULT_CONFIG["spawn_anchor"]))
 
         for key_id in saved_keys:
             if key_id in self.checkboxes:
@@ -424,10 +543,27 @@ class KeySelectorWindow:
         self._refresh_ui()
 
     def _deselect_all(self):
-        """Clear all selections."""
+        """Clear all selections and remove currently active floating keys."""
         for var in self.checkboxes.values():
             var.set(False)
         self._refresh_ui()
+        save_selected_keys_and_spawn_anchor([], self.spawn_anchor_var.get())
+
+        if self.on_clear:
+            self.on_clear()
+
+        self.count_label.config(text="All keys cleared", fg=COLORS["red"])
+        self.window.after(
+            2000,
+            lambda: (
+                self._update_count(),
+                self.count_label.config(fg=COLORS["text_dim"]),
+            ),
+        )
+
+    def _save_spawn_setting(self):
+        """Persist the selected spawn anchor."""
+        save_spawn_anchor(self.spawn_anchor_var.get(), clear_positions=True)
 
     def _reset_config(self):
         """
@@ -438,6 +574,7 @@ class KeySelectorWindow:
 
         for var in self.checkboxes.values():
             var.set(False)
+        self.spawn_anchor_var.set(DEFAULT_CONFIG["spawn_anchor"])
 
         self._refresh_ui()
 
@@ -471,7 +608,7 @@ class KeySelectorWindow:
             self._update_count()
             return
 
-        save_selected_keys(selected)
+        save_selected_keys_and_spawn_anchor(selected, self.spawn_anchor_var.get())
         self.window.destroy()
         self.on_activate(selected)
 

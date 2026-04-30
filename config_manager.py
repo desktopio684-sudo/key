@@ -8,6 +8,7 @@ Config is stored at: ~/.config/onscreen-keys/config.json
 Schema:
 {
     "selected_keys": ["enter", "dot", "comma", ...],
+    "spawn_anchor": "center",
     "positions": {
         "enter": {"x": 100, "y": 200},
         ...
@@ -30,7 +31,17 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
 DEFAULT_CONFIG = {
     "selected_keys": [],
+    "spawn_anchor": "center",
     "positions": {},
+}
+
+# Valid values for unsaved floating key spawn anchor.
+VALID_SPAWN_ANCHORS = {
+    "center",
+    "top_left",
+    "top_right",
+    "bottom_left",
+    "bottom_right",
 }
 
 # ─── Debouncing and cache state ──────────────────────────────────────
@@ -66,6 +77,8 @@ def load_config():
                 # Validate structure — ensure expected keys exist
                 if not isinstance(data.get("selected_keys"), list):
                     data["selected_keys"] = []
+                if data.get("spawn_anchor") not in VALID_SPAWN_ANCHORS:
+                    data["spawn_anchor"] = DEFAULT_CONFIG["spawn_anchor"]
                 if not isinstance(data.get("positions"), dict):
                     data["positions"] = {}
 
@@ -145,6 +158,53 @@ def save_selected_keys(key_ids):
     config = load_config()
     config["selected_keys"] = list(key_ids)
     save_config(config)
+
+
+def save_selected_keys_and_spawn_anchor(key_ids, anchor):
+    """
+    Convenience: update selected keys and spawn anchor in one write.
+
+    Args:
+        key_ids: list of key ID strings.
+        anchor: one of VALID_SPAWN_ANCHORS.
+    """
+    if anchor not in VALID_SPAWN_ANCHORS:
+        anchor = DEFAULT_CONFIG["spawn_anchor"]
+
+    config = load_config()
+    config["selected_keys"] = list(key_ids)
+    config["spawn_anchor"] = anchor
+    save_config(config)
+
+
+def save_spawn_anchor(anchor, clear_positions=False):
+    """
+    Convenience: persist default spawn anchor for unsaved keys.
+
+    Args:
+        anchor: one of VALID_SPAWN_ANCHORS.
+        clear_positions: if True, discard dragged positions so the new
+            spawn setting applies on the next activation.
+    """
+    if anchor not in VALID_SPAWN_ANCHORS:
+        anchor = DEFAULT_CONFIG["spawn_anchor"]
+
+    config = load_config()
+    config["spawn_anchor"] = anchor
+    if clear_positions:
+        config["positions"] = {}
+    save_config(config)
+
+
+def get_spawn_anchor():
+    """
+    Return persisted spawn anchor, falling back to default.
+    """
+    config = load_config()
+    anchor = config.get("spawn_anchor")
+    if anchor not in VALID_SPAWN_ANCHORS:
+        return DEFAULT_CONFIG["spawn_anchor"]
+    return anchor
 
 
 def save_key_position(key_id, x, y):

@@ -255,11 +255,17 @@ class OnScreenKeyboardApp:
             print(f"[main] Activating {len(selected_key_ids)} key(s)...")
             self.key_manager.activate_keys(selected_key_ids)
 
+        def on_clear():
+            """Callback when user clears all selected keys."""
+            print("[main] Clearing all active keys...")
+            self.key_manager.destroy_all()
+
         # Schedule on main thread (important for Tk)
         def create_selector():
             selector = KeySelectorWindow(
                 on_activate_callback=on_activate,
                 parent_root=self.root,
+                on_clear_callback=on_clear,
             )
             # Handle window close (X button)
             selector.window.protocol(
