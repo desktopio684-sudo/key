@@ -2,7 +2,9 @@ import unittest
 
 from floating_keys import (
     _parse_xrandr_primary_bounds,
+    build_xdotool_key_spec,
     calculate_spawn_layout,
+    is_latching_modifier,
     key_needs_spawn_position,
 )
 
@@ -112,6 +114,26 @@ class FloatingKeyLayoutTests(unittest.TestCase):
 
         self.assertFalse(key_needs_spawn_position("enter", lookup))
         self.assertTrue(key_needs_spawn_position("escape", lookup))
+
+    def test_only_expected_modifiers_latch(self):
+        for key_id in ("ctrl_l", "alt_l", "super_l", "shift_l"):
+            self.assertTrue(is_latching_modifier(key_id))
+
+        self.assertFalse(is_latching_modifier("caps_lock"))
+        self.assertFalse(is_latching_modifier("enter"))
+
+    def test_latched_modifiers_build_chorded_xdotool_key_spec(self):
+        self.assertEqual(
+            build_xdotool_key_spec("c", {"ctrl_l"}),
+            "Control_L+c",
+        )
+        self.assertEqual(
+            build_xdotool_key_spec("Delete", {"shift_l", "ctrl_l", "alt_l"}),
+            "Control_L+Alt_L+Shift_L+Delete",
+        )
+
+    def test_no_latched_modifiers_keeps_plain_key_spec(self):
+        self.assertEqual(build_xdotool_key_spec("a", set()), "a")
 
 
 if __name__ == "__main__":

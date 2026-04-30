@@ -46,6 +46,14 @@ DENSE_MIN_WIDTH = 28
 DENSE_MIN_HEIGHT = 24
 
 _PRIMARY_MONITOR_BOUNDS = None
+LATCHING_MODIFIER_KEY_IDS = {"ctrl_l", "alt_l", "super_l", "shift_l"}
+MODIFIER_SEND_ORDER = ("ctrl_l", "alt_l", "super_l", "shift_l")
+MODIFIER_XDOTOOL_KEYS = {
+    "ctrl_l": "Control_L",
+    "alt_l": "Alt_L",
+    "super_l": "Super_L",
+    "shift_l": "Shift_L",
+}
 
 
 def _parse_xrandr_primary_bounds(output):
@@ -211,6 +219,21 @@ def key_needs_spawn_position(key_id, position_lookup=get_saved_position):
     return position_lookup(key_id) is None
 
 
+def is_latching_modifier(key_id):
+    """Return True for modifiers that behave as sticky on-screen keys."""
+    return key_id in LATCHING_MODIFIER_KEY_IDS
+
+
+def build_xdotool_key_spec(base_key, active_modifier_ids):
+    """Build an xdotool key spec such as Control_L+Alt_L+t."""
+    modifiers = [
+        MODIFIER_XDOTOOL_KEYS[key_id]
+        for key_id in MODIFIER_SEND_ORDER
+        if key_id in active_modifier_ids
+    ]
+    return "+".join(modifiers + [base_key])
+
+
 class FloatingKey:
     """
     A single floating key button window.
@@ -243,6 +266,7 @@ class FloatingKey:
 
         self.xdotool_key = self.key_info["xdotool_key"]
         self.label_text = self.key_info["label"]
+        self.is_sticky_modifier = is_latching_modifier(self.key_id)
 
         # Resolve per-category color scheme
         category = get_category_for_key(key_id)
@@ -433,9 +457,15 @@ class FloatingKey:
         terminal — not our floating button.
         """
 
-        # Visual flash feedback
-        self.btn_label.config(bg=self.colors["flash"], fg=self.colors["active_fg"])
-        self.window.update_idletasks()
+        if self.is_sticky_modifier:
+            self.manager.toggle_modifier(self.key_id)
+            self._refresh_visual_state()
+            return
+
+        key_spec = build_xdotool_key_spec(
+            self.xdotool_key,
+            self.manager.active_modifier_keys,
+        )
 
         last_wid = self.manager.last_focused_window
 
@@ -448,14 +478,14 @@ class FloatingKey:
                     check=False,
                 )
                 subprocess.run(
-                    ["xdotool", "key", "--clearmodifiers", self.xdotool_key],
+                    ["xdotool", "key", key_spec],
                     timeout=2,
                     check=False,
                 )
             else:
                 # Fallback: no tracked window — just send key blindly
                 subprocess.run(
-                    ["xdotool", "key", "--clearmodifiers", self.xdotool_key],
+                    ["xdotool", "key", key_spec],
                     timeout=2,
                     check=False,
                 )
@@ -464,20 +494,35 @@ class FloatingKey:
         except subprocess.TimeoutExpired:
             print(f"[floating_keys] Warning: xdotool timed out for key '{self.xdotool_key}'")
 
+        # Visual flash feedback after sending the key.
+        self.btn_label.config(bg=self.colors["flash"], fg=self.colors["active_fg"])
+        self.window.update_idletasks()
+
         # Reset color after brief flash
         self.window.after(
             120,
-            lambda: self.btn_label.config(bg=self.colors["bg"], fg=self.colors["fg"]),
+            self._refresh_visual_state,
         )
 
     def _on_hover_enter(self, event):
         """Lighten button on hover."""
-        if not self._is_dragging:
+        if not self._is_dragging and not self._is_latched_modifier():
             self.btn_label.config(bg=self.colors["active_bg"], fg=self.colors["active_fg"])
 
     def _on_hover_leave(self, event):
         """Reset button color on hover leave."""
-        self.btn_label.config(bg=self.colors["bg"], fg=self.colors["fg"])
+        self._refresh_visual_state()
+
+    def _is_latched_modifier(self):
+        """Return whether this modifier is currently latched."""
+        return self.is_sticky_modifier and self.manager.is_modifier_active(self.key_id)
+
+    def _refresh_visual_state(self):
+        """Refresh button color, keeping latched modifiers visibly selected."""
+        if self._is_latched_modifier():
+            self.btn_label.config(bg=self.colors["active_bg"], fg=self.colors["active_fg"])
+        else:
+            self.btn_label.config(bg=self.colors["bg"], fg=self.colors["fg"])
 
     def show(self):
         """Show the floating button."""
@@ -517,6 +562,44 @@ class FloatingKeyManager:
         self.last_focused_window = None
         self._our_window_ids = set()      # X11 window IDs of our buttons
         self._focus_poll_running = False
+        self.active_modifier_keys = set()
+
+    def is_modifier_active(self, key_id):
+        """Return whether an on-screen modifier is latched."""
+        return key_id in self.active_modifier_keys
+
+    def toggle_modifier(self, key_id):
+        """Toggle a sticky modifier and refresh its button state."""
+        if key_id in self.active_modifier_keys:
+            self.active_modifier_keys.remove(key_id)
+            # Release the modifier via xdotool
+            if key_id in MODIFIER_XDOTOOL_KEYS:
+                subprocess.run(
+                    ["xdotool", "keyup", MODIFIER_XDOTOOL_KEYS[key_id]],
+                    timeout=1,
+                    check=False,
+                )
+        else:
+            self.active_modifier_keys.add(key_id)
+            # Press the modifier via xdotool
+            if key_id in MODIFIER_XDOTOOL_KEYS:
+                subprocess.run(
+                    ["xdotool", "keydown", MODIFIER_XDOTOOL_KEYS[key_id]],
+                    timeout=1,
+                    check=False,
+                )
+
+    def clear_all_modifiers(self):
+        """Release all latched modifiers at once."""
+        # Release modifiers in reverse order for natural key-up behavior
+        for key_id in reversed(MODIFIER_SEND_ORDER):
+            if key_id in self.active_modifier_keys:
+                subprocess.run(
+                    ["xdotool", "keyup", MODIFIER_XDOTOOL_KEYS[key_id]],
+                    timeout=1,
+                    check=False,
+                )
+        self.active_modifier_keys.clear()
 
     def activate_keys(self, key_ids):
         """
@@ -644,6 +727,7 @@ class FloatingKeyManager:
     def destroy_all(self):
         """Destroy all floating button windows."""
         self._focus_poll_running = False
+        self.active_modifier_keys.clear()
         for fk in self.floating_keys.values():
             fk.destroy()
         self.floating_keys.clear()

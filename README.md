@@ -84,6 +84,38 @@ The app saves selected keys and button positions in:
 - `Ctrl+K`: Open key selector (reconfigure keys)
 - `Ctrl+H`: Toggle floating keys visibility (hide/show)
 
+
+## Recent Changes
+
+### On-Screen Keyboard Modifier Improvements
+- **Toggle Modifiers**: Ctrl, Alt, Super, and Shift now function as toggle modifiers on the onscreen keyboard.
+  - First tap selects/latches the modifier (visually highlighted).
+  - Second tap unselects/unlatches it.
+- **Chorded Input**: While modifiers are latched, tapping other onscreen keys sends combined inputs (e.g., Ctrl+A, Ctrl+Shift+Z).
+- **Physical Keyboard Integration**: Removed `--clearmodifiers` from xdotool calls, allowing latched onscreen modifiers to combine seamlessly with physically held keys (e.g., hold physical Shift + tap onscreen Ctrl+A).
+
+These changes enhance usability for accessibility, preventing accidental modifier activation and improving input flexibility.
+
+## Setup Tips
+
+### Complete Setup
+1. **Create an Alias for Easy Access**:
+   ```
+   alias ikey='/media/mayank/dd27226f-2b51-488c-ad00-88f25b01319e/key/run.sh'
+   ```
+   Add this to your `~/.bashrc` or `~/.zshrc` file to run the onscreen keyboard with `ikey`.
+
+2. **If Enter Key is Not Working**:
+   - Add these custom keybindings to your `~/.bashrc` or `~/.zshrc`:
+     ```
+     # Alt+i → Auto-run ikey (on-screen keyboard)
+     # Alt+e → Simulate Enter key (broken Enter key workaround)
+     bind -x '"\ei":"ikey"'
+     bind '"\ee":"\C-m"'
+     ```
+   - Reload your shell config with `source ~/.bashrc` (or equivalent) after adding.
+
+
 ## 3. Local Development
 
 ### Dev workflow
